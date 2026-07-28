@@ -1,4 +1,3 @@
-"use client";
 import FinalizePayrollButton from "@/components/FinalizePayrollButton";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
@@ -7,14 +6,15 @@ import Link from "next/link";
 export default async function PayrollDetailsPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
+  const { id } = await params;
   const supabase = await createClient();
 
   const { data: run, error } = await supabase
     .from("payroll_runs")
     .select("*")
-    .eq("id", params.id)
+    .eq("id", id)
     .single();
 
   if (error || !run) {
@@ -30,7 +30,7 @@ export default async function PayrollDetailsPage({
         serial_number
       )
     `)
-    .eq("run_id", params.id);
+    .eq("run_id", id);
 
 
   const totals = {

@@ -8,11 +8,13 @@ export async function POST(
   {
     params,
   }: {
-    params: {
+    params: Promise<{
       id: string;
-    };
+    }>;
   }
 ) {
+
+  const { id } = await params;
 
   const profile = await getCurrentProfile();
 
@@ -33,7 +35,7 @@ export async function POST(
 
     const journalEntry =
       await finalizePayroll(
-        params.id,
+        id,
         profile.id
       );
 

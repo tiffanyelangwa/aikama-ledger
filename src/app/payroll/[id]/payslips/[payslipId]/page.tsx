@@ -6,11 +6,12 @@ import Link from "next/link";
 export default async function PayslipPage({
   params,
 }: {
-  params: {
+  params: Promise<{
     id: string;
     payslipId: string;
-  };
+  }>;
 }) {
+  const { id, payslipId } = await params;
 
   const supabase = await createClient();
 
@@ -30,7 +31,7 @@ export default async function PayslipPage({
         year
       )
     `)
-    .eq("id", params.payslipId)
+    .eq("id", payslipId)
     .single();
 
 
@@ -62,7 +63,7 @@ export default async function PayslipPage({
 
 
         <Link
-          href={`/payroll/${params.id}`}
+          href={`/payroll/${id}`}
           className="rounded border px-4 py-2"
         >
           Back
