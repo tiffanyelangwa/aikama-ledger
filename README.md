@@ -1,5 +1,7 @@
 # Aikama Ledger
 
+[Live preview](https://aikama-ledger-wm24-git-imp-38841f-tiffanyelangwa-3615s-projects.vercel.app)
+
 Aikama Ledger is a full-stack financial operations platform being built for **Aikama Investment**, a Tanzanian business with **100+ employees operating across 3 branches**.
 
 The system is designed to centralize accounting, payroll, approvals, reporting, and eventually inventory into one platform tailored to the company’s operating workflows.
