@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { accountBalance, currentMonthRange, formatMoney, netProfit } from "@/lib/ledger";
+import { accountBalance, currentMonthRange, formatMoney, netProfit, trialBalanceRows } from "@/lib/ledger";
 import type { LedgerSummaryRow } from "@/types/database";
 
 type Tab = "trial-balance" | "profit-loss" | "balance-sheet";
@@ -27,24 +27,29 @@ export default function ReportsClient() {
     async function load() {
       setLoading(true);
       setError(null);
-      const supabase = createClient();
-      const { data, error: rpcError } = await supabase.rpc("get_ledger_summary", {
-        p_period_start: start,
-        p_period_end: end,
-      });
-      if (cancelled) return;
-      if (rpcError) {
-        setError(rpcError.message);
-      } else {
-        setRows((data ?? []) as LedgerSummaryRow[]);
+      try {
+        if (!end || (tab === "profit-loss" && (!start || start > end))) {
+          throw new Error("Choose valid dates; the start must not be after the end.");
+        }
+        const supabase = createClient();
+        const { data, error: rpcError } = await supabase.rpc("get_ledger_summary", {
+          p_period_start: tab === "profit-loss" ? start : null,
+          p_period_end: end,
+        });
+        if (rpcError) throw new Error(rpcError.message);
+        if (!data) throw new Error("No report response was returned.");
+        if (!cancelled) setRows(data as LedgerSummaryRow[]);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load report.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     }
     load();
     return () => {
       cancelled = true;
     };
-  }, [start, end]);
+  }, [start, end, tab]);
 
   return (
     <div>
@@ -53,6 +58,7 @@ export default function ReportsClient() {
           <label className="block text-xs font-medium text-gray-600">Start</label>
           <input
             type="date"
+            disabled={tab !== "profit-loss"}
             value={start}
             onChange={(e) => setStart(e.target.value)}
             className="mt-1 rounded border border-gray-300 px-2 py-1.5 text-sm"
@@ -85,6 +91,7 @@ export default function ReportsClient() {
         ))}
       </div>
 
+      <p className="mt-3 text-sm text-gray-600">{tab === "profit-loss" ? `Activity from ${start} through ${end}` : `Cumulative balances through ${end}`}</p>
       <div className="mt-4">
         {loading && <p className="text-sm text-gray-400">Loading...</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
@@ -96,7 +103,8 @@ export default function ReportsClient() {
   );
 }
 
-function TrialBalance({ rows }: { rows: LedgerSummaryRow[] }) {
+function TrialBalance({ rows: sourceRows }: { rows: LedgerSummaryRow[] }) {
+  const rows = trialBalanceRows(sourceRows);
   const totalDebit = rows.reduce((sum, r) => sum + Number(r.debit), 0);
   const totalCredit = rows.reduce((sum, r) => sum + Number(r.credit), 0);
 
@@ -162,11 +170,14 @@ function BalanceSheet({ rows }: { rows: LedgerSummaryRow[] }) {
   const totalAssets = assetRows.reduce((sum, r) => sum + accountBalance(r), 0);
   const totalLiabilities = liabilityRows.reduce((sum, r) => sum + accountBalance(r), 0);
   const totalEquityAccounts = equityRows.reduce((sum, r) => sum + accountBalance(r), 0);
-  const periodNetProfit = netProfit(rows);
-  const totalEquity = totalEquityAccounts + periodNetProfit;
+  const unclosedEarnings = netProfit(rows);
+  const totalEquity = totalEquityAccounts + unclosedEarnings;
 
   return (
     <div className="space-y-6">
+      <p role="status" className={Math.round((totalAssets - totalLiabilities - totalEquity) * 100) === 0 ? "text-green-700" : "font-semibold text-red-700"}>
+        Reconciliation difference (assets − liabilities − equity): {formatMoney(totalAssets - totalLiabilities - totalEquity)}
+      </p>
       <Section title="Assets" rows={assetRows} total={totalAssets} />
       <Section title="Liabilities" rows={liabilityRows} total={totalLiabilities} />
       <div>
@@ -182,8 +193,8 @@ function BalanceSheet({ rows }: { rows: LedgerSummaryRow[] }) {
               </tr>
             ))}
             <tr className="border-t border-gray-50">
-              <td className="px-3 py-1.5 text-gray-700">Net profit (this period)</td>
-              <td className="px-3 py-1.5 text-right">{formatMoney(periodNetProfit)}</td>
+              <td className="px-3 py-1.5 text-gray-700">Unclosed earnings through end date</td>
+              <td className="px-3 py-1.5 text-right">{formatMoney(unclosedEarnings)}</td>
             </tr>
           </tbody>
           <tfoot>

@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import { monthRange, currentMonthRange } from "@/lib/ledger";
 import { getCurrentProfile } from "@/lib/auth";
 
-export default async function NewPayrollRunPage() {
+export default async function NewPayrollRunPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  const { error: actionError } = await searchParams;
   const supabase = await createClient();
   const profile = await getCurrentProfile();
 
@@ -11,16 +13,14 @@ export default async function NewPayrollRunPage() {
     redirect("/login");
   }
 
-  const { data: employees } = await supabase
+  const { data: employees, error: employeesError } = await supabase
     .from("employees")
     .select("*")
     .eq("active", true)
     .order("serial_number");
 
-  const today = new Date();
-
-  const month = today.getMonth() + 1;
-  const year = today.getFullYear();
+  if (employeesError) return <p role="alert">Cannot load employees: {employeesError.message}</p>;
+  const [year, month] = currentMonthRange().start.split("-").map(Number);
 
   const monthName = new Date(
     year,
@@ -41,199 +41,185 @@ export default async function NewPayrollRunPage() {
       redirect("/login");
     }
 
-    const month = Number(formData.get("month"));
-    const year = Number(formData.get("year"));
+    try {
+      const month = Number(formData.get("month"));
+      const year = Number(formData.get("year"));
+      const period = monthRange(year, month);
+      const { data: employees, error: employeeError } = await supabase
+        .from("employees").select("*").eq("active", true);
+      if (employeeError) throw new Error(`Cannot load employees: ${employeeError.message}`);
+      if (!employees?.length) throw new Error("No active employees are available. Check employee access before generating payroll.");
+      const { data: settings, error: settingsError } = await supabase
+        .from("payroll_settings").select("*").limit(1).single();
+      if (settingsError || !settings) throw new Error(`Cannot load payroll settings: ${settingsError?.message ?? "not found"}`);
+      const { data: run, error: runError } = await supabase
+        .from("payroll_runs").insert({
+          month, year, period_start: period.start, period_end: period.end,
+          status: "draft", created_by: profile.id,
+        }).select().single();
+      if (runError || !run) throw new Error(`Cannot create payroll: ${runError?.message ?? "no run returned"}`);
 
-    const { data: run, error: runError } = await supabase
-      .from("payroll_runs")
-      .insert({
-        month,
-        year,
-        period_start: `${year}-${String(month).padStart(2, "0")}-01`,
-        period_end: `${year}-${String(month).padStart(2, "0")}-31`,
-        status: "draft",
-        created_by: profile.id,
-      })
-      .select()
-      .single();
+      for (const employee of employees) {
+        const basicSalary =
+          Number(employee.basic_salary ?? 0);
 
-    if (runError) {
-      throw new Error(runError.message);
-    }
+        const annualLeave = 0;
+        const overtime = 0;
 
-    const { data: employees } = await supabase
-      .from("employees")
-      .select("*")
-      .eq("active", true);
+        const grossSalary =
+          basicSalary +
+          annualLeave +
+          overtime;
 
-    if (!employees) {
-      redirect("/payroll");
-    }
+        /*
+        ---------------------------------
+        NSSF
+        ---------------------------------
+        */
 
-    for (const employee of employees) {
-      const basicSalary =
-        Number(employee.basic_salary ?? 0);
+        const employeeRate =
+          Number(settings?.nssf_employee_rate ?? 10);
 
-      const annualLeave = 0;
-      const overtime = 0;
+        const employerRate =
+          Number(settings?.nssf_employer_rate ?? 10);
 
-      const grossSalary =
-        basicSalary +
-        annualLeave +
-        overtime;
+        const sdlRate =
+          Number(settings?.sdl_rate ?? 3.5);
 
-      /*
-      ---------------------------------
-      NSSF
-      ---------------------------------
-      */
+        const nssfEmployee =
+          grossSalary *
+          employeeRate /
+          100;
 
-      const settingsResult = await supabase
-        .from("payroll_settings")
-        .select("*")
-        .limit(1)
-        .single();
+        const nssfEmployer =
+          grossSalary *
+          employerRate /
+          100;
 
-      const settings = settingsResult.data;
+        /*
+        ---------------------------------
+        TAXABLE PAY
+        ---------------------------------
+        */
 
-      const employeeRate =
-        Number(settings?.nssf_employee_rate ?? 10);
+        const taxablePay =
+          grossSalary -
+          nssfEmployee;
 
-      const employerRate =
-        Number(settings?.nssf_employer_rate ?? 10);
+        /*
+        ---------------------------------
+        PAYE
+        Placeholder
+        Will replace with Tanzania
+        tax brackets later.
+        ---------------------------------
+        */
 
-      const sdlRate =
-        Number(settings?.sdl_rate ?? 3.5);
+        let paye = 0;
 
-      const nssfEmployee =
-        grossSalary *
-        employeeRate /
-        100;
+        // Tanzania PAYE brackets
+        if (taxablePay <= 270000) {
+          paye = 0;
+        } else if (taxablePay <= 520000) {
+          paye =
+            (taxablePay - 270000) * 0.08;
+        } else if (taxablePay <= 760000) {
+          paye =
+            20000 +
+            (taxablePay - 520000) * 0.20;
+        } else if (taxablePay <= 1000000) {
+          paye =
+            68000 +
+            (taxablePay - 760000) * 0.25;
+        } else {
+          paye =
+            128000 +
+            (taxablePay - 1000000) * 0.30;
+        }
 
-      const nssfEmployer =
-        grossSalary *
-        employerRate /
-        100;
+        /*
+        ---------------------------------
+        SDL
+        ---------------------------------
+        */
 
-      /*
-      ---------------------------------
-      TAXABLE PAY
-      ---------------------------------
-      */
+        const sdlAmount =
+          grossSalary *
+          sdlRate /
+          100;
 
-      const taxablePay =
-        grossSalary -
-        nssfEmployee;
+        /*
+        ---------------------------------
+        DEDUCTIONS
+        ---------------------------------
+        */
 
-      /*
-      ---------------------------------
-      PAYE
-      Placeholder
-      Will replace with Tanzania
-      tax brackets later.
-      ---------------------------------
-      */
+        const salaryAdvance = 0;
+        const staffLoan = 0;
 
-      let paye = 0;
+        const netSalary =
+          grossSalary -
+          nssfEmployee -
+          paye -
+          salaryAdvance -
+          staffLoan;
 
-      // Tanzania PAYE brackets
-      if (taxablePay <= 270000) {
-        paye = 0;
-      } else if (taxablePay <= 520000) {
-        paye =
-          (taxablePay - 270000) * 0.08;
-      } else if (taxablePay <= 760000) {
-        paye =
-          20000 +
-          (taxablePay - 520000) * 0.20;
-      } else if (taxablePay <= 1000000) {
-        paye =
-          68000 +
-          (taxablePay - 760000) * 0.25;
-      } else {
-        paye =
-          128000 +
-          (taxablePay - 1000000) * 0.30;
+        /*
+        ---------------------------------
+        SAVE PAYSLIP
+        ---------------------------------
+        */
+
+        const { error: payslipError } = await supabase
+          .from("payslips")
+          .insert({
+            run_id: run.id,
+            employee_id: employee.id,
+
+            basic_salary: basicSalary,
+
+            allowances: overtime + annualLeave,
+
+            annual_leave: annualLeave,
+
+            overtime: overtime,
+
+            gross_salary: grossSalary,
+
+            nssf_employee: nssfEmployee,
+
+            nssf_employer: nssfEmployer,
+
+            taxable_pay: taxablePay,
+
+            paye: paye,
+
+            sdl: sdlAmount,
+
+            sdl_amount: sdlAmount,
+
+            salary_advance: salaryAdvance,
+
+            staff_loan: staffLoan,
+
+            net_salary: netSalary,
+          });
+
+        if (payslipError) {
+          throw new Error(`Payroll run ${run.id} is incomplete: ${payslipError.message}. Do not generate a replacement without reviewing this draft.`);
+        }
       }
 
-      /*
-      ---------------------------------
-      SDL
-      ---------------------------------
-      */
-
-      const sdlAmount =
-        grossSalary *
-        sdlRate /
-        100;
-
-      /*
-      ---------------------------------
-      DEDUCTIONS
-      ---------------------------------
-      */
-
-      const salaryAdvance = 0;
-      const staffLoan = 0;
-
-      const netSalary =
-        grossSalary -
-        nssfEmployee -
-        paye -
-        salaryAdvance -
-        staffLoan;
-
-      /*
-      ---------------------------------
-      SAVE PAYSLIP
-      ---------------------------------
-      */
-
-      const { error: payslipError } = await supabase
-        .from("payslips")
-        .insert({
-          run_id: run.id,
-          employee_id: employee.id,
-
-          basic_salary: basicSalary,
-
-          allowances: overtime + annualLeave,
-
-          annual_leave: annualLeave,
-
-          overtime: overtime,
-
-          gross_salary: grossSalary,
-
-          nssf_employee: nssfEmployee,
-
-          nssf_employer: nssfEmployer,
-
-          taxable_pay: taxablePay,
-
-          paye: paye,
-
-          sdl: sdlAmount,
-
-          sdl_amount: sdlAmount,
-
-          salary_advance: salaryAdvance,
-
-          staff_loan: staffLoan,
-
-          net_salary: netSalary,
-        });
-
-      if (payslipError) {
-        throw new Error(payslipError.message);
-      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Payroll generation failed.";
+      redirect(`/payroll/new?error=${encodeURIComponent(message)}`);
     }
-
     redirect("/payroll");
   }
 
   return (
     <div className="mx-auto max-w-5xl">
+      {actionError && <p role="alert" className="mb-4 text-red-700">{actionError}</p>}
 
       <div className="mb-8 flex items-center justify-between">
 
@@ -303,6 +289,7 @@ export default async function NewPayrollRunPage() {
             <input
               type="number"
               name="year"
+              min="1" max="9999" step="1" required
               defaultValue={year}
               className="mt-1 w-full rounded border px-3 py-2"
             />

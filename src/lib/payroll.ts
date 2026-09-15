@@ -1,269 +1,41 @@
 import { createClient } from "@/lib/supabase/server";
+import { PAYROLL_ACCOUNTS, resolvePayrollAccounts, buildPayrollJournal } from "@/lib/payroll-journal";
+import { monthRange } from "@/lib/ledger";
 
-
-async function getAccountCode(
-  supabase: any,
-  name: string
-) {
-  const { data: account, error } = await supabase
-    .from("chart_of_accounts")
-    .select("code")
-    .ilike("name", name)
-    .single();
-
-
-  if (error || !account) {
-    throw new Error(
-      `Missing account in chart of accounts: ${name}`
-    );
-  }
-
-
-  return account.code;
-}
-
-
-
-export async function finalizePayroll(
-  payrollRunId: string,
-  userId: string
-) {
+export async function finalizePayroll(payrollRunId: string, userId: string) {
   const supabase = await createClient();
-
-
-  const { data: payrollRun, error: payrollError } =
-    await supabase
-      .from("payroll_runs")
-      .select("*")
-      .eq("id", payrollRunId)
-      .single();
-
-
-  if (payrollError || !payrollRun) {
-    throw new Error("Payroll run not found");
-  }
-
-
-  if (payrollRun.status === "finalized") {
-    throw new Error("Payroll already finalized");
-  }
-
-
-
-  const { data: payslips, error: payslipError } =
-    await supabase
-      .from("payslips")
-      .select("*")
-      .eq("run_id", payrollRunId);
-
-
-  if (payslipError || !payslips?.length) {
-    throw new Error("No payslips found");
-  }
-
-
-
-  let grossSalary = 0;
-  let nssfEmployee = 0;
-  let nssfEmployer = 0;
-  let paye = 0;
-  let sdl = 0;
-  let netSalary = 0;
-
-
-
-  for (const slip of payslips) {
-
-    grossSalary += Number(
-      slip.gross_salary ?? 0
-    );
-
-    nssfEmployee += Number(
-      slip.nssf_employee ?? 0
-    );
-
-    nssfEmployer += Number(
-      slip.nssf_employer ?? 0
-    );
-
-    paye += Number(
-      slip.paye ?? 0
-    );
-
-    sdl += Number(
-      slip.sdl_amount ?? slip.sdl ?? 0
-    );
-
-    netSalary += Number(
-      slip.net_salary ?? 0
-    );
-  }
-
-
-
-  /*
-    Get accounts dynamically
-  */
-
-  const salaryExpense =
-    await getAccountCode(
-      supabase,
-      "Salary Expense"
-    );
-
-
-  const nssfPayable =
-    await getAccountCode(
-      supabase,
-      "NSSF Payable"
-    );
-
-
-  const payePayable =
-    await getAccountCode(
-      supabase,
-      "PAYE Payable"
-    );
-
-
-  const sdlPayable =
-    await getAccountCode(
-      supabase,
-      "SDL Payable"
-    );
-
-
-  const salaryPayable =
-    await getAccountCode(
-      supabase,
-      "Salary Payable"
-    );
-
-
-
-
-  const { data: journalEntry, error: journalError } =
-    await supabase
-      .from("journal_entries")
-      .insert({
-        description:
-          `Payroll ${payrollRun.month}/${payrollRun.year}`,
-
-        entry_date:
-          new Date().toISOString(),
-
-        created_by: userId,
-
-        status: "posted",
-      })
-      .select()
-      .single();
-
-
-
-  if (journalError || !journalEntry) {
-    throw new Error(
-      journalError?.message ??
-      "Failed creating journal entry"
-    );
-  }
-
-
-
-
-  const lines = [
-
-    {
-      account_code: salaryExpense,
-      debit: grossSalary,
-      credit: 0,
-      description:
-        "Salary expense",
-    },
-
-
-    {
-      account_code: nssfPayable,
-      debit: 0,
-      credit:
-        nssfEmployee + nssfEmployer,
-      description:
-        "NSSF payable",
-    },
-
-
-    {
-      account_code: payePayable,
-      debit: 0,
-      credit: paye,
-      description:
-        "PAYE payable",
-    },
-
-
-    {
-      account_code: sdlPayable,
-      debit: 0,
-      credit: sdl,
-      description:
-        "SDL payable",
-    },
-
-
-    {
-      account_code: salaryPayable,
-      debit: 0,
-      credit: netSalary,
-      description:
-        "Employee salaries payable",
-    },
-
-  ];
-
-
-
-  const { error: lineError } =
-    await supabase
-      .from("journal_lines")
-      .insert(
-        lines.map((line) => ({
-          journal_entry_id:
-            journalEntry.id,
-
-          ...line,
-        }))
-      );
-
-
-
-  if (lineError) {
-    throw new Error(
-      lineError.message
-    );
-  }
-
-
-
-
-  const { error: updateError } =
-    await supabase
-      .from("payroll_runs")
-      .update({
-        status: "finalized",
-        journal_entry_id:
-          journalEntry.id,
-      })
-      .eq("id", payrollRunId);
-
-
-
-  if (updateError) {
-    throw new Error(
-      updateError.message
-    );
-  }
-
-
-
-  return journalEntry;
+  const { data: accounts, error: accountsError } = await supabase
+    .from("accounts")
+    .select("code, category, active")
+    .in("code", Object.values(PAYROLL_ACCOUNTS).flatMap((m) => m.code ? [m.code] : []));
+  if (accountsError) throw new Error(`Cannot validate payroll accounts: ${accountsError.message}. Missing mappings: Salary Expense, SDL Payable, Salary Payable. No journal was created.`);
+  // Phase 1 stops here until all three missing mappings are explicitly configured.
+  const codes = resolvePayrollAccounts(accounts ?? []);
+
+  const { data: run, error: runError } = await supabase.from("payroll_runs").select("*").eq("id", payrollRunId).single();
+  if (runError || !run) throw new Error(`Cannot load payroll run: ${runError?.message ?? "not found"}`);
+  if (run.status !== "draft" || run.journal_entry_id) throw new Error("Payroll is not an unposted draft; inspect its existing journal before retrying.");
+  const period = monthRange(Number(run.year), Number(run.month));
+  if (run.period_end !== period.end) throw new Error("Payroll period end does not match its month/year; no journal was created.");
+
+  const { data: slips, error: slipsError } = await supabase.from("payslips").select("*").eq("run_id", payrollRunId);
+  if (slipsError) throw new Error(`Cannot load payslips: ${slipsError.message}`);
+  const lines = buildPayrollJournal(slips ?? [], codes);
+
+  // Existing non-atomic lifecycle, unreachable while required mappings are missing.
+  const { data: entry, error: entryError } = await supabase.from("journal_entries").insert({
+    entry_date: run.period_end, description: `Payroll ${run.month}/${run.year}`,
+    source: "payroll", status: "pending", created_by: userId,
+  }).select("id").single();
+  if (entryError || !entry) throw new Error(`Cannot create payroll journal: ${entryError?.message ?? "no entry returned"}`);
+  const { error: lineError } = await supabase.from("journal_lines").insert(lines.map((line) => ({ ...line, entry_id: entry.id })));
+  if (lineError) throw new Error(`Journal ${entry.id} remains pending: ${lineError.message}. Do not retry; inspect this entry first.`);
+  const { data: posted, error: postError } = await supabase.from("journal_entries")
+    .update({ status: "posted", approved_by: userId }).eq("id", entry.id).eq("status", "pending").select("id").single();
+  if (postError || !posted) throw new Error(`Journal ${entry.id} could not be posted: ${postError?.message ?? "no row updated"}. Do not retry; inspect this entry first.`);
+  const { data: finalized, error: finalError } = await supabase.from("payroll_runs")
+    .update({ status: "finalized", finalized_at: new Date().toISOString(), journal_entry_id: entry.id })
+    .eq("id", payrollRunId).eq("status", "draft").select("id").single();
+  if (finalError || !finalized) throw new Error(`Journal ${entry.id} posted, but payroll finalization failed: ${finalError?.message ?? "no row updated"}. Do not retry; reconcile the journal linkage first.`);
+  return posted;
 }

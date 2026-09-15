@@ -1,5 +1,4 @@
 import FinalizePayrollButton from "@/components/FinalizePayrollButton";
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 
@@ -18,10 +17,10 @@ export default async function PayrollDetailsPage({
     .single();
 
   if (error || !run) {
-    redirect("/payroll");
+    return <p role="alert" className="text-red-700">Cannot load payroll run: {error?.message ?? "not found"}</p>;
   }
 
-  const { data: payslips } = await supabase
+  const { data: payslips, error: payslipsError } = await supabase
     .from("payslips")
     .select(`
       *,
@@ -32,6 +31,8 @@ export default async function PayrollDetailsPage({
     `)
     .eq("run_id", id);
 
+
+  if (payslipsError) return <p role="alert" className="text-red-700">Cannot load payslips: {payslipsError.message}</p>;
 
   const totals = {
     gross: 0,
@@ -217,14 +218,13 @@ export default async function PayrollDetailsPage({
 
 
         <p className="mt-2 text-sm text-gray-500">
-          Finalizing payroll will create the accounting
-          journal entry and lock this payroll run.
+          Status: {run.status}. Finalization requires all payroll account mappings to be configured.
         </p>
 
 
-        <FinalizePayrollButton
-          payrollRunId={run.id}
-        />
+        {run.status === "finalized" ? <p>Payroll finalized.</p> : (
+          <FinalizePayrollButton payrollRunId={run.id} />
+        )}
 
 
       </div>

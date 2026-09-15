@@ -6,14 +6,16 @@ export default async function PayrollPage() {
   const supabase = await createClient();
 
 
-  const { data: payrollRuns } = await supabase
+  const { data: payrollRuns, error } = await supabase
     .from("payroll_runs")
     .select("*")
-    .order("created_at", {
+    .order("period_start", {
       ascending: false,
     });
 
 
+
+  if (error) return <p role="alert" className="text-red-700">Cannot load payroll runs: {error.message}</p>;
 
   return (
     <div>
@@ -87,7 +89,7 @@ export default async function PayrollPage() {
               </th>
 
               <th className="px-4 py-3 text-left">
-                Created
+                Period start
               </th>
 
               <th className="px-4 py-3 text-right">
@@ -122,9 +124,7 @@ export default async function PayrollPage() {
 
 
                 <td className="px-4 py-3">
-                  {new Date(
-                    run.created_at
-                  ).toLocaleDateString()}
+                  {run.period_start}
                 </td>
 
 
