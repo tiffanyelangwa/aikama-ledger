@@ -1,4 +1,3 @@
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 
@@ -32,15 +31,18 @@ export default async function PayslipPage({
       )
     `)
     .eq("id", payslipId)
+    .eq("run_id", id)
     .single();
 
 
 
   if (error || !payslip) {
-    redirect("/payroll");
+    return <p role="alert" className="text-red-700">Cannot load payslip: {error?.message ?? "not found"}</p>;
   }
 
 
+
+  if (!payslip.employees || !payslip.payroll_runs) return <p role="alert">Employee or payroll details are inaccessible.</p>;
 
   return (
 

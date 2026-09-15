@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 
 export default function FinalizePayrollButton({
   payrollRunId,
@@ -18,26 +17,19 @@ export default function FinalizePayrollButton({
     setLoading(true);
     setMessage("");
 
-    const response = await fetch(
-      `/api/payroll/${payrollRunId}/finalize`,
-      {
-        method: "POST",
+    try {
+      const response = await fetch(`/api/payroll/${payrollRunId}/finalize`, { method: "POST" });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error ?? "Could not finalize payroll. Check your session and try again.");
       }
-    );
-
-
-    if (!response.ok) {
-      setMessage("Failed to finalize payroll");
+      setMessage("Payroll finalized successfully");
+      router.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Network error while finalizing payroll.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-
-    setMessage("Payroll finalized successfully");
-
-    router.refresh();
-
-    setLoading(false);
   }
 
 
@@ -56,7 +48,7 @@ export default function FinalizePayrollButton({
 
 
       {message && (
-        <p className="mt-2 text-sm text-gray-600">
+        <p role="status" className="mt-2 text-sm text-gray-600">
           {message}
         </p>
       )}

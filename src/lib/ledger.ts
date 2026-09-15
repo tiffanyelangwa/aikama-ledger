@@ -25,10 +25,30 @@ export function formatMoney(value: number): string {
   return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+export function monthRange(year: number, month: number): { start: string; end: string } {
+  if (!Number.isInteger(year) || year < 1 || year > 9999 ||
+      !Number.isInteger(month) || month < 1 || month > 12) {
+    throw new Error("Choose a valid month (1–12) and year (1–9999).");
+  }
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const prefix = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+  return { start: `${prefix}-01`, end: `${prefix}-${days[month - 1]}` };
+}
+
 export function currentMonthRange(): { start: string; end: string } {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const toISODate = (d: Date) => d.toISOString().slice(0, 10);
-  return { start: toISODate(start), end: toISODate(end) };
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Africa/Dar_es_Salaam", year: "numeric", month: "numeric",
+  }).formatToParts(new Date());
+  return monthRange(
+    Number(parts.find((p) => p.type === "year")!.value),
+    Number(parts.find((p) => p.type === "month")!.value),
+  );
+}
+
+export function trialBalanceRows(rows: LedgerSummaryRow[]): LedgerSummaryRow[] {
+  return rows.map((row) => {
+    const balance = Number(row.debit) - Number(row.credit);
+    return { ...row, debit: Math.max(balance, 0), credit: Math.max(-balance, 0) };
+  });
 }
